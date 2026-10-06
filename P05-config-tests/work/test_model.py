@@ -28,8 +28,20 @@ def test_further_is_never_faster(trained_model):
 def test_error_is_better_than_guessing(model_mae, baseline_mae):
     assert model_mae < baseline_mae
 
+def test_heavier_traffic_is_never_faster(trained_model):
+    order1 = make_order(traffic_level=1)
+    order3 = make_order(traffic_level=3)
+
+    pred1 = trained_model.predict([order1])[0]
+    pred3 = trained_model.predict([order3])[0]
+
+    assert pred3 >= pred1
 
 def test_heavier_traffic_is_never_faster(trained_model):
-    light = trained_model.predict(make_order(traffic_level=1))[0]
-    heavy = trained_model.predict(make_order(traffic_level=3))[0]
-    assert heavy >= light
+    order1 = make_order(traffic_level=1)
+    order3 = make_order(traffic_level=3)
+
+    pred1 = trained_model.predict(order1)[0]
+    pred3 = trained_model.predict(order3)[0]
+
+    assert pred3 >= pred1
