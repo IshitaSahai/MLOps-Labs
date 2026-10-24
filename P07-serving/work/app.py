@@ -1,59 +1,134 @@
-"The delivery-time prediction service."
-
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
-from fastapi import FastAPI
+
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-HERE = Path(__file__).resolve().parent
-FEATURES = ["distance_km", "prep_time_min", "traffic_level", "rain"]
+
+# --------------------------------------------------
+# Application setup
+# --------------------------------------------------
 
 app = FastAPI(
-    title="Delivery Time Predictor",
-    description="Predicts how many minutes a food order will take.",
+    title="Delivery Time Prediction API",
+    description="API for predicting food delivery time.",
     version="1.0.0",
 )
 
-model = joblib.load(HERE / "model.joblib")
+MODEL_PATH = Path(__file__).resolve().parent / "model.joblib"
 
+if not MODEL_PATH.exists():
+    raise FileNotFoundError(
+        f"Model file not found: {MODEL_PATH}"
+    )
+
+model = joblib.load(MODEL_PATH)
+
+FEATURES = [
+    "distance_km",
+    "prep_time_min",
+    "traffic_level",
+    "rain",
+]
+
+
+# --------------------------------------------------
+# Request format and validation
+# --------------------------------------------------
 
 class Order(BaseModel):
-    "One food order waiting to be delivered."
-
-    distance_km: float = Field(..., gt=0, le=25, examples=[4.2])
-    prep_time_min: int = Field(..., ge=0, le=120, examples=[12])
-    traffic_level: int = Field(..., ge=1, le=3, examples=[2])
-    rain: int = Field(..., ge=0, le=1, examples=[0])
+    distance_km: float = Field(gt=0, le=25)
+    prep_time_min: float = Field(ge=0)
+    traffic_level: int = Field(ge=1, le=3)
+    rain: int = Field(ge=0, le=1)
 
 
-class Prediction(BaseModel):
-    delivery_min: float
-    model_version: str
+class CompareOrders(BaseModel):
+    order1: Order
+    order2: Order
+
+
+def predict_delivery(order: Order) -> float:
+    """Return the predicted delivery time in minutes."""
+
+    features = pd.DataFrame(
+        [
+            {
+                "distance_km": order.distance_km,
+                "prep_time_min": order.prep_time_min,
+                "traffic_level": order.traffic_level,
+                "rain": order.rain,
+            }
+        ],
+        columns=FEATURES,
+    )
+
+    prediction = model.predict(features)[0]
+
+    return round(float(prediction), 2)
+
+
+# --------------------------------------------------
+# Endpoints
+# --------------------------------------------------
+
+@app.get("/")
+def home():
+    return {
+        "message": "Delivery Time Prediction API is running",
+        "docs": "/docs",
+    }
 
 
 @app.get("/health")
 def health():
-    "Is the service up, and is a model loaded?"
-    return {"status": "ok", "model_loaded": model is not None}
-
-
-@app.post("/predict", response_model=Prediction)
-def predict(order: Order):
-    "Predict the delivery time for one order, in minutes."
-    row = pd.DataFrame([order.model_dump()])[FEATURES]
-    minutes = float(model.predict(row)[0])
-    return Prediction(delivery_min=round(minutes, 1),
-                      model_version=app.version)
-
+    return {
+        "status": "healthy",
+        "model_loaded": model is not None,
+    }
 
 
 @app.get("/model-info")
 def model_info():
-    "Describe the model this service is running."
     return {
-        "features": FEATURES,
+        "model_name": "delivery-time-model",
+        "model_version": "1.0.0",
         "model_type": type(model).__name__,
-        "version": app.version,
+        "features": FEATURES,
+        "max_distance_km": 25,
+    }
+
+
+@app.post("/predict")
+def predict(order: Order):
+    delivery_time = predict_delivery(order)
+
+    return {
+        "delivery_min": delivery_time,
+        "model_version": "1.0.0",
+    }
+
+
+@app.post("/compare")
+def compare_orders(request: CompareOrders):
+    prediction1 = predict_delivery(request.order1)
+    prediction2 = predict_delivery(request.order2)
+
+    return {
+        "order1_delivery_min": prediction1,
+        "order2_delivery_min": prediction2,
+        "faster_order": (
+            "order1"
+            if prediction1 < prediction2
+            else "order2"
+            if prediction2 < prediction1
+            else "equal"
+        ),
+        "difference_min": round(
+            abs(prediction1 - prediction2), 2
+        ),
+        "model_version": "1.0.0",
     }
